@@ -18,7 +18,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <set>
 #include <string.h>
 #include <vector>
 
@@ -750,7 +749,8 @@ void Processor::SelectFrequencyMasking(const JPEGData& jpg, OutputImage* img,
         first_up_iter = false;
       }
 
-      std::set<int> changed_blocks;
+      std::vector<bool> changed_blocks_set(num_blocks, false);
+      std::vector<int> changed_blocks_list;
       float val_threshold = 0.0;
       int changed_coeffs = 0;
       int est_jpg_size = prev_size;
@@ -787,7 +787,10 @@ void Processor::SelectFrequencyMasking(const JPEGData& jpg, OutputImage* img,
         UpdateACHistogram(1, block, quant, &ac_histograms[c]);
         img->component(c).SetCoeffBlock(block_x, block_y, block);
         last_indexes[block_ix] += direction;
-        changed_blocks.insert(block_ix);
+        if (!changed_blocks_set[block_ix]) {
+          changed_blocks_set[block_ix] = true;
+          changed_blocks_list.push_back(block_ix);
+        }
         val_threshold = global_order[i].val;
         ++changed_coeffs;
         static const int kEntropyCodeUpdateFreq = 10;
@@ -821,7 +824,7 @@ void Processor::SelectFrequencyMasking(const JPEGData& jpg, OutputImage* img,
                   "Blocks[%zd/%d/%d] ValThres[%.4f] Out[%7zd] EstErr[%.2f%%]",
                   stats_->counters[kNumItersCnt], img->FrameTypeStr().c_str(),
                   comp_mask, direction > 0 ? "up" : "down", changed_coeffs,
-                  global_order_size, changed_blocks.size(),
+                  global_order_size, changed_blocks_list.size(),
                   blocks_to_change, num_blocks, val_threshold,
                   encoded_jpg.size(),
                   100.0 - (100.0 * est_jpg_size) / encoded_jpg.size());
@@ -832,7 +835,7 @@ void Processor::SelectFrequencyMasking(const JPEGData& jpg, OutputImage* img,
         const int tiles_x = (width + kTileEdge - 1) / kTileEdge;
         const int tiles_y = (height + kTileEdge - 1) / kTileEdge;
         std::vector<uint8_t> dirty_tiles(tiles_x * tiles_y, 0);
-        for (int block_ix : changed_blocks) {
+        for (int block_ix : changed_blocks_list) {
           const int block_x = block_ix % block_width;
           const int block_y = block_ix / block_width;
           const int px0 = std::max(0, block_x * 8 * factor_x - kTileHaloPx);

@@ -80,6 +80,7 @@ class ButteraugliComparator : public Comparator {
   bool reference_precomputed_ = false;
   double reference_precompute_ms_ = 0.0;
   std::vector<std::vector<std::vector<float>>> per_block_pregamma_;
+  mutable std::vector<std::vector<float>> compare_block_rgb1_;
   ::butteraugli::ButteraugliComparator comparator_;
   float distance_;
   std::vector<float> distmap_;
