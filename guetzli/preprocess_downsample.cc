@@ -25,6 +25,34 @@ using std::size_t;
 
 namespace {
 
+// Lookup tables for gamma <-> linear conversion, avoiding repeated pow() calls.
+static const float* GammaToLinearTable() {
+  static float table[256];
+  static bool initialized = false;
+  if (!initialized) {
+    for (int i = 0; i < 256; ++i) {
+      table[i] = static_cast<float>(std::pow(i / 255.0, 2.2));
+    }
+    initialized = true;
+  }
+  return table;
+}
+
+// Precomputed table for linear [0..1] -> gamma [0..255], with 4096 entries.
+static const float* LinearToGammaTable() {
+  static constexpr int kTableSize = 4096;
+  static float table[kTableSize];
+  static bool initialized = false;
+  if (!initialized) {
+    for (int i = 0; i < kTableSize; ++i) {
+      double linear = static_cast<double>(i) / (kTableSize - 1);
+      table[i] = static_cast<float>(255.0 * std::pow(linear, 1.0 / 2.2));
+    }
+    initialized = true;
+  }
+  return table;
+}
+
 // convolve with size*size kernel
 std::vector<float> Convolve2D(const std::vector<float>& image, int w, int h,
                               const double* kernel, int size) {
@@ -308,14 +336,19 @@ inline float YUVToB(float y, float u, float v) {
   return y + 1.772f * (u - 128.0f);
 }
 
-// TODO(user) Use SRGB->linear conversion and a lookup-table.
 inline float GammaToLinear(float x) {
-  return static_cast<float>(std::pow(x / 255.0f, 2.2));
+  const float* lut = GammaToLinearTable();
+  int idx = static_cast<int>(x + 0.5f);
+  idx = std::max(0, std::min(255, idx));
+  return lut[idx];
 }
 
-// TODO(user) Use linear->SRGB conversion and a lookup-table.
 inline float LinearToGamma(float x) {
-  return 255.0 * std::pow(x, 1.0 / 2.2);
+  constexpr int kTableSize = 4096;
+  const float* lut = LinearToGammaTable();
+  int idx = static_cast<int>(x * (kTableSize - 1) + 0.5f);
+  idx = std::max(0, std::min(kTableSize - 1, idx));
+  return lut[idx];
 }
 
 std::vector<float> LinearlyAveragedLuma(const std::vector<float>& rgb) {
@@ -460,12 +493,20 @@ std::vector<std::vector<float> > RGBToYUV420(
       RGBToYUV(LinearlyDownsample2x2(rgbf, width, height));
   std::vector<std::vector<float> > yuv_guess = yuv_target;
   yuv_guess[0] = Upsample2x2(yuv_guess[0], width, height);
-  // TODO(user): Stop early if the error is small enough.
   for (int iter = 0; iter < 20; ++iter) {
     std::vector<float> rgb_rec = YUV420ToRGB(yuv_guess, width, height);
     std::vector<float> y_rec = LinearlyAveragedLuma(rgb_rec);
     std::vector<std::vector<float> > yuv_rec =
         RGBToYUV(LinearlyDownsample2x2(rgb_rec, width, height));
+
+    // Stop early if the reconstruction error is small enough.
+    double max_err = 0.0;
+    for (size_t i = 0; i < y_target.size(); ++i) {
+      max_err = std::max(max_err,
+                         static_cast<double>(std::abs(y_rec[i] - y_target[i])));
+    }
+    if (max_err < 0.5) break;
+
     UpdateGuess(y_target, y_rec, &yuv_guess[0]);
     UpdateGuess(yuv_target[1], yuv_rec[1], &yuv_guess[1]);
     UpdateGuess(yuv_target[2], yuv_rec[2], &yuv_guess[2]);

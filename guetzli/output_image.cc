@@ -202,9 +202,10 @@ void OutputImageComponent::UpdatePixelsForBlock(
       }
     }
   } else {
-    printf("Sampling ratio not supported: factor_x = %d factor_y = %d\n",
-           factor_x_, factor_y_);
-    exit(1);
+    fprintf(stderr,
+            "Sampling ratio not supported: factor_x = %d factor_y = %d\n",
+            factor_x_, factor_y_);
+    return;  // Unsupported sampling ratio; leave pixels unchanged.
   }
 }
 

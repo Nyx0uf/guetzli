@@ -17,6 +17,7 @@
 #ifndef GUETZLI_STATS_H_
 #define GUETZLI_STATS_H_
 
+#include <chrono>
 #include <cstdio>
 #include <cstdint>
 #include <map>
@@ -26,6 +27,21 @@
 
 
 namespace guetzli {
+
+struct ProcessStats;  // Forward declaration for ScopedTimer.
+
+// RAII timer that accumulates elapsed milliseconds into a target variable.
+// Only measures when profiling is enabled (non-null debug_output_file).
+class ScopedTimer {
+ public:
+  ScopedTimer(double* target, const ProcessStats* stats);
+  ~ScopedTimer();
+  double elapsed_ms() const;
+ private:
+  double* target_;
+  bool active_;
+  std::chrono::steady_clock::time_point start_;
+};
 
 static const char* const  kNumItersCnt = "number of iterations";
 static const char* const kNumItersUpCnt = "number of iterations up";
@@ -59,6 +75,27 @@ struct ProcessStats {
 
   std::string filename;
 };
+
+inline ScopedTimer::ScopedTimer(double* target, const ProcessStats* stats)
+    : target_(target),
+      active_(stats != nullptr && stats->debug_output_file != nullptr) {
+  if (active_) {
+    start_ = std::chrono::steady_clock::now();
+  }
+}
+
+inline ScopedTimer::~ScopedTimer() {
+  if (active_ && target_) {
+    *target_ += std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start_).count();
+  }
+}
+
+inline double ScopedTimer::elapsed_ms() const {
+  if (!active_) return 0.0;
+  return std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - start_).count();
+}
 
 }  // namespace guetzli
 

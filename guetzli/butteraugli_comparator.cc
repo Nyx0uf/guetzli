@@ -86,56 +86,39 @@ ButteraugliComparator::ButteraugliComparator(const int width, const int height,
 }
 
 void ButteraugliComparator::Compare(const OutputImage& img) {
-  const bool profiling =
-      (stats_ != nullptr && stats_->debug_output_file != nullptr);
-  const auto start = profiling
-      ? std::chrono::steady_clock::now()
-      : std::chrono::steady_clock::time_point();
-
-  const auto convert_start = profiling
-      ? std::chrono::steady_clock::now()
-      : std::chrono::steady_clock::time_point();
-  img.ToLinearRGB(&candidate_linear_rgb_);
-  CopyPackedToPlanes(width_, height_, candidate_linear_rgb_, &candidate_planes_);
-  const auto convert_end = profiling
-      ? std::chrono::steady_clock::now()
-      : std::chrono::steady_clock::time_point();
-
-  const auto diffmap_start = profiling
-      ? std::chrono::steady_clock::now()
-      : std::chrono::steady_clock::time_point();
-  comparator_.Diffmap(candidate_planes_, diffmap_image_);
-  if (distmap_.size() != static_cast<size_t>(width_ * height_)) {
-    distmap_.resize(width_ * height_);
-  }
-  CopyToPacked(diffmap_image_, &distmap_);
-  distance_ = ::butteraugli::ButteraugliScoreFromDiffmap(diffmap_image_);
-  const auto diffmap_end = profiling
-      ? std::chrono::steady_clock::now()
-      : std::chrono::steady_clock::time_point();
-
   double convert_ms = 0.0;
   double diffmap_ms = 0.0;
-  double total_ms = 0.0;
-  if (profiling) {
-    convert_ms = std::chrono::duration<double, std::milli>(
-        convert_end - convert_start).count();
-    diffmap_ms = std::chrono::duration<double, std::milli>(
-        diffmap_end - diffmap_start).count();
-    total_ms = std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - start).count();
+  ScopedTimer total_timer(nullptr, stats_);
+
+  {
+    ScopedTimer convert_timer(&convert_ms, stats_);
+    img.ToLinearRGB(&candidate_linear_rgb_);
+    CopyPackedToPlanes(width_, height_, candidate_linear_rgb_,
+                       &candidate_planes_);
   }
+
+  {
+    ScopedTimer diffmap_timer(&diffmap_ms, stats_);
+    comparator_.Diffmap(candidate_planes_, diffmap_image_);
+    if (distmap_.size() != static_cast<size_t>(width_ * height_)) {
+      distmap_.resize(width_ * height_);
+    }
+    CopyToPacked(diffmap_image_, &distmap_);
+    distance_ = ::butteraugli::ButteraugliScoreFromDiffmap(diffmap_image_);
+  }
+
+  double total_ms = total_timer.elapsed_ms();
 
   if (stats_ != nullptr) {
     ++stats_->butteraugli_compare_calls;
-    if (profiling) {
+    if (stats_->debug_output_file != nullptr) {
       stats_->butteraugli_compare_total_ms += total_ms;
       stats_->butteraugli_color_convert_total_ms += convert_ms;
       stats_->butteraugli_diffmap_total_ms += diffmap_ms;
     }
   }
   GUETZLI_LOG(stats_, " BA[100.00%%] D[%6.4f]", distance_);
-  if (profiling) {
+  if (stats_ != nullptr && stats_->debug_output_file != nullptr) {
     GUETZLI_LOG(stats_,
                 " CompareTiming total_ms=%.3f convert_ms=%.3f diffmap_ms=%.3f ref_precompute_ms=%.3f ref_cached=%d\n",
                 total_ms, convert_ms, diffmap_ms,
@@ -504,9 +487,9 @@ void ButteraugliBlockDiff(double xyb0[3 * kBlockSize],
 
 void ButteraugliComparator::StartBlockComparisons() {
   std::vector<ImageF> dummy(3);
-  std::vector<ImageF> rgb0 =
-      ::butteraugli::OpsinDynamicsImage(LinearRgb(width_, height_, rgb_orig_));
-  ::butteraugli::Mask(rgb0, rgb0,
+  // Reuse the reference opsin image computed in the constructor instead of
+  // recomputing OpsinDynamicsImage from scratch.
+  ::butteraugli::Mask(reference_opsin_, reference_opsin_,
                       &mask_xyz_, &dummy);
 }
 
@@ -554,17 +537,21 @@ double ButteraugliComparator::CompareBlock(const OutputImage& img,
   const std::vector<std::vector<float> >& rgb0 =
       per_block_pregamma_[block_ix];
 
-  std::vector<std::vector<float> > rgb1(3, std::vector<float>(kDCTBlockSize));
-  img.ToLinearRGB(xmin, ymin, 8, 8, &rgb1);
-  rgb1 = ::butteraugli::PackedFromPlanes(::butteraugli::OpsinDynamicsImage(
-      ::butteraugli::PlanesFromPacked(8, 8, rgb1)));
+  // Reuse pre-allocated buffer instead of heap-allocating per call.
+  if (compare_block_rgb1_.empty()) {
+    compare_block_rgb1_.assign(3, std::vector<float>(kDCTBlockSize));
+  }
+  img.ToLinearRGB(xmin, ymin, 8, 8, &compare_block_rgb1_);
+  compare_block_rgb1_ =
+      ::butteraugli::PackedFromPlanes(::butteraugli::OpsinDynamicsImage(
+          ::butteraugli::PlanesFromPacked(8, 8, compare_block_rgb1_)));
 
   double b0[3 * kDCTBlockSize];
   double b1[3 * kDCTBlockSize];
   for (int c = 0; c < 3; ++c) {
     for (int ix = 0; ix < kDCTBlockSize; ++ix) {
       b0[c * kDCTBlockSize + ix] = rgb0[c][ix];
-      b1[c * kDCTBlockSize + ix] = rgb1[c][ix];
+      b1[c * kDCTBlockSize + ix] = compare_block_rgb1_[c][ix];
     }
   }
   double diff_xyz[3] = { 0.0 };

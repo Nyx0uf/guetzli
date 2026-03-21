@@ -25,11 +25,16 @@ double ScoreJPEG(double butteraugli_distance, int size,
   constexpr double kScale = 50;
   constexpr double kMaxExponent = 10;
   constexpr double kLargeSize = 1e30;
-  // TODO(user): The score should also depend on distance below target (and be
-  // smooth).
+  // Smooth scoring function that also rewards distance below target.
+  // When below target, a small bonus proportional to the margin is applied
+  // so the optimizer prefers solutions with headroom rather than treating
+  // all below-target results identically.
   double diff = butteraugli_distance - butteraugli_target;
   if (diff <= 0.0) {
-    return size;
+    // Smoothly reward being further below the target distance.
+    // The multiplier ranges from 1.0 (at target) down toward ~0.5 (far below).
+    double below_bonus = 1.0 / (1.0 + (-diff) / butteraugli_target);
+    return below_bonus * size;
   } else {
     double exponent = kScale * diff;
     if (exponent > kMaxExponent) {
